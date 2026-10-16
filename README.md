@@ -17,19 +17,25 @@ Backend sistem **Project IOT Smart Door** — pintu pintar berbasis kartu RFID (
 ```
 SmartDoor.Backend.slnx          # Solution .NET
 src/SmartDoor.Backend/
-├── Data/SmartDoorDb.cs         # Akses database SQLite
+├── Data/SmartDoorDb.cs         # Akses database SQL Server (Dapper)
 ├── Models/                     # Pengguna, KartuRfid, LogAkses, Pintu, HakAkses, dll.
 └── Services/
     ├── AuthService.cs          # Autentikasi & validasi kartu
     └── SerialService.cs        # Komunikasi Serial dengan Arduino
 database/
-├── schema.sql                  # Skema database
+├── schema.sql                  # Skema SQL Server (6 tabel + 7 default field)
 ├── seed.sql                    # Data awal
 └── migrate_*.sql               # Script migrasi
+docs/
+├── bisnis-proses.md            # Pertemuan 3: aktor, diagram alur, aturan bisnis
+└── tools-framework.md          # Pertemuan 5: tools, komponen, framework, setup
 ```
 
 ## Menjalankan
+Butuh .NET 10 SDK dan SQL Server (LocalDB atau Express). Langkah lengkap ada di [docs/tools-framework.md](docs/tools-framework.md).
 ```bash
+sqlcmd -S localhost\SQLEXPRESS -E -i database/schema.sql
+sqlcmd -S localhost\SQLEXPRESS -E -i database/seed.sql
 dotnet build SmartDoor.Backend.slnx
 ```
 Class library ini di-reference oleh aplikasi [Smartdoor-Frontend](https://github.com/Project-IOT-Smart-Door/Smartdoor-Frontend) dan menjalankan logika auth serta komunikasi serial.
