@@ -1,0 +1,263 @@
+From 39b1e540424039173ea96e0544b5038e6abf028d Mon Sep 17 00:00:00 2001
+From: "cline-cloud[bot]" <cline-cloud[bot]@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 11:48:12 +0000
+Subject: [PATCH] frontend: sambungkan ke backend lewat smartdoor.config.json
+
+- App.xaml.cs: pakai SmartDoorConfig.Load(), AuthService pakai IdPintu dari config
+- MainWindow/MainViewModel: cek koneksi DB + buka port serial saat Loaded
+- perbaiki Reply (kartu diterima selalu kirim DENY) dan update UI dari thread serial
+- README: cara konfigurasi backend/database/port
+---
+ README.md                                     | 30 ++++++++++
+ src/SmartDoor.App/App.xaml.cs                 | 16 ++---
+ src/SmartDoor.App/MainWindow.xaml.cs          |  7 +--
+ src/SmartDoor.App/SmartDoor.App.csproj        |  4 ++
+ src/SmartDoor.App/ViewModels/MainViewModel.cs | 60 ++++++++++++++++---
+ src/SmartDoor.App/smartdoor.config.json       | 15 +++++
+ 6 files changed, 114 insertions(+), 18 deletions(-)
+ create mode 100644 src/SmartDoor.App/smartdoor.config.json
+
+diff --git a/README.md b/README.md
+index 8fe8c40..4fcafe7 100644
+--- a/README.md
++++ b/README.md
+@@ -34,6 +34,36 @@ dotnet run --project src/SmartDoor.App
+ ```
+ Dibutuhkan [.NET SDK](https://dotnet.microsoft.com/download) dan koneksi Serial ke Arduino Uno.
+ 
++## Konfigurasi (menyambung ke backend & database)
++
++Repo ini memakai class library dari [Smartdoor-Backend](https://github.com/Project-IOT-Smart-Door/Smartdoor-Backend)
++lewat `ProjectReference`. Kedua repo **harus di-clone bersebelahan**:
++
++```
++Project-IOT/
++├── Smartdoor-Backend/
++│   └── src/SmartDoor.Backend/SmartDoor.Backend.csproj
++└── Smartdoor-Frontend/
++    └── src/SmartDoor.App/SmartDoor.App.csproj   # ref: ..\..\..\Smartdoor-Backend\...
++```
++
++Pengaturan ada di `src/SmartDoor.App/smartdoor.config.json` (ikut ter-copy ke folder exe):
++
++| Kunci | Isi |
++|---|---|
++| `ConnectionString` | server + nama database, mis. `Server=localhost\SQLEXPRESS;Database=SmartDoor;Trusted_Connection=True;TrustServerCertificate=True` |
++| `SerialPort` | port Arduino, mis. `COM3` |
++| `IdPintu` | `id_pintu` alat ini di tabel `PINTU` (seed = 1) |
++
++Urutan pembacaan: environment variable `SMARTDOOR_CONNECTION` / `SMARTDOOR_SERIAL_PORT`
++→ `smartdoor.config.json` → default LocalDB + COM3. Tidak perlu ubah kode untuk pindah server.
++
++Saat aplikasi dibuka, status di layar utama menampilkan hasil cek koneksi database,
++jadi kalau server/nama database salah langsung kelihatan tanpa crash.
++
++Urutan setup: jalankan `database/schema.sql` lalu `database/seed.sql` di SQL Server
++(login admin: `admin` / `admin123`), sesuaikan `ConnectionString`, baru jalankan aplikasi.
++
+ ## Membangun Installer
+ Script `installer/setup.iss` dibangun dengan [Inno Setup](https://jrsoftware.org/isinfo.php). Hasil `Setup.exe` diunggah lewat fitur **Releases**, bukan dimasukkan ke kode.
+ 
+diff --git a/src/SmartDoor.App/App.xaml.cs b/src/SmartDoor.App/App.xaml.cs
+index 5fcb54e..9fb2035 100644
+--- a/src/SmartDoor.App/App.xaml.cs
++++ b/src/SmartDoor.App/App.xaml.cs
+@@ -1,5 +1,3 @@
+-using System.Configuration;
+-using System.Data;
+ using System.Windows;
+ using Microsoft.Extensions.DependencyInjection;
+ using SmartDoor.App.Themes;
+@@ -10,7 +8,9 @@ using SmartDoor.Backend.Services;
+ namespace SmartDoor.App;
+ 
+ /// <summary>
+-/// Interaction logic for App.xaml — DI container: db -> auth -> serial -> viewmodel.
++/// Interaction logic for App.xaml — DI container: config -> db -> auth -> serial -> viewmodel.
++/// Connection string & port serial TIDAK di-hardcode di sini; semuanya dari
++/// SmartDoorConfig (env var / smartdoor.config.json / default LocalDB).
+ /// </summary>
+ public partial class App : Application
+ {
+@@ -20,12 +20,14 @@ public partial class App : Application
+     {
+         base.OnStartup(e);
+ 
+-        // Falzen: LocalDB jalan di laptop ini. Kalau nanti pakai SQLEXPRESS, ganti ke Server=localhost\SQLEXPRESS.
+-        const string cs = @"Server=(localdb)\MSSQLLocalDB;Database=SmartDoor;Trusted_Connection=True;TrustServerCertificate=True";
++        // Falzen: LocalDB jalan di laptop ini. Untuk SQLEXPRESS, ubah
++        // "ConnectionString" di smartdoor.config.json — tidak perlu ubah kode.
++        var config = SmartDoorConfig.Load();
+ 
+         Services = new ServiceCollection()
+-            .AddSingleton(new SmartDoorDb(cs))
+-            .AddSingleton(sp => new AuthService(sp.GetRequiredService<SmartDoorDb>()))
++            .AddSingleton(config)
++            .AddSingleton(new SmartDoorDb(config.ConnectionString))
++            .AddSingleton(sp => new AuthService(sp.GetRequiredService<SmartDoorDb>(), config.IdPintu))
+             .AddSingleton<SerialService>()
+             .AddSingleton<MainViewModel>()
+             .AddSingleton<MainWindow>()
+diff --git a/src/SmartDoor.App/MainWindow.xaml.cs b/src/SmartDoor.App/MainWindow.xaml.cs
+index e75b57f..22d0183 100644
+--- a/src/SmartDoor.App/MainWindow.xaml.cs
++++ b/src/SmartDoor.App/MainWindow.xaml.cs
+@@ -2,7 +2,6 @@ using System.ComponentModel;
+ using System.Windows;
+ using SmartDoor.App.ViewModels;
+ using SmartDoor.App.Views;
+-using SmartDoor.Backend.Services;
+ 
+ namespace SmartDoor.App;
+ 
+@@ -15,15 +14,15 @@ public partial class MainWindow : Window
+     private readonly LoginView _login = new();
+     private readonly AdminView _admin = new();
+ 
+-    public MainWindow(MainViewModel vm, SerialService serial)
++    public MainWindow(MainViewModel vm)
+     {
+         InitializeComponent();
+         _vm = vm;
+         DataContext = vm;
+         _vm.PropertyChanged += OnVmChanged;
+         ShowScreen(_vm.Screen);
+-        // TODO: serial.Start("COM3");
+-        _ = serial;
++        // Cek koneksi database + buka port serial (COM dari smartdoor.config.json).
++        Loaded += async (_, _) => await _vm.InisialisasiAsync();
+     }
+ 
+     private void OnVmChanged(object? sender, PropertyChangedEventArgs e)
+diff --git a/src/SmartDoor.App/SmartDoor.App.csproj b/src/SmartDoor.App/SmartDoor.App.csproj
+index c73e6c3..e369e53 100644
+--- a/src/SmartDoor.App/SmartDoor.App.csproj
++++ b/src/SmartDoor.App/SmartDoor.App.csproj
+@@ -9,6 +9,10 @@
+     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+   </ItemGroup>
+ 
++  <ItemGroup>
++    <None Update="smartdoor.config.json" CopyToOutputDirectory="PreserveNewest" />
++  </ItemGroup>
++
+   <PropertyGroup>
+     <OutputType>WinExe</OutputType>
+     <TargetFramework>net10.0-windows</TargetFramework>
+diff --git a/src/SmartDoor.App/ViewModels/MainViewModel.cs b/src/SmartDoor.App/ViewModels/MainViewModel.cs
+index 71a6b7b..12a8f0b 100644
+--- a/src/SmartDoor.App/ViewModels/MainViewModel.cs
++++ b/src/SmartDoor.App/ViewModels/MainViewModel.cs
+@@ -1,4 +1,5 @@
+ using System.Collections.ObjectModel;
++using System.Windows;
+ using CommunityToolkit.Mvvm.ComponentModel;
+ using CommunityToolkit.Mvvm.Input;
+ using SmartDoor.App.Themes;
+@@ -16,6 +17,7 @@ public sealed partial class MainViewModel : ObservableObject
+     private readonly SmartDoorDb _db;
+     private readonly AuthService _auth;
+     private readonly SerialService _serial;
++    private readonly SmartDoorConfig _config;
+ 
+     [ObservableProperty]
+     private string _status = "Menunggu kartu...";
+@@ -36,23 +38,67 @@ public sealed partial class MainViewModel : ObservableObject
+     public ObservableCollection<Pengguna> Users { get; } = [];
+     public ObservableCollection<LogAkses> Logs { get; } = [];
+ 
+-    // DI: db/auth/serial dari container (lihat App.xaml.cs).
+-    public MainViewModel(SmartDoorDb db, AuthService auth, SerialService serial)
++    // DI: db/auth/serial/config dari container (lihat App.xaml.cs).
++    public MainViewModel(SmartDoorDb db, AuthService auth, SerialService serial, SmartDoorConfig config)
+     {
+         _db = db;
+         _auth = auth;
+         _serial = serial;
++        _config = config;
+         _serial.UidReceived += uid => _ = OnUidAsync(uid);
+     }
+ 
+-    // Dipanggil tiap UID masuk dari Arduino.
++    // Dipanggil sekali dari MainWindow.Loaded: cek database lalu buka port serial.
++    // Hasilnya tampil di Status supaya kelihatan apakah backend benar-benar tersambung.
++    public async Task InisialisasiAsync()
++    {
++        var cek = await _db.CekKoneksiAsync().ConfigureAwait(false);
++        var pesanDb = $"{cek.Pesan} (server: {_config.NamaServer})";
++        OnUi(() => Status = pesanDb);
++
++        var galatSerial = BukaSerial();
++        if (galatSerial is not null)
++            OnUi(() => Status = $"{pesanDb} | {galatSerial}");
++    }
++
++    // Buka port Arduino sesuai config. Null = sukses, selain itu pesan galat untuk UI.
++    private string? BukaSerial()
++    {
++        if (string.IsNullOrWhiteSpace(_config.SerialPort)) return null;
++        try
++        {
++            _serial.Start(_config.SerialPort);
++            return null;
++        }
++        catch (Exception ex)
++        {
++            return $"Serial {_config.SerialPort} gagal: {ex.Message}";
++        }
++    }
++
++    // Dipanggil tiap UID masuk dari Arduino (thread serial, BUKAN UI thread).
+     [RelayCommand]
+     private async Task OnUidAsync(string uid)
+     {
+-        var hasil = await _auth.CheckAsync(uid).ConfigureAwait(true);
+-        _serial.Reply(hasil == "diterima" ? "OPEN" : "DENY");
+-        Status = hasil == "diterima" ? $"Terbuka — {uid}" : $"Ditolak — {uid}";
+-        LogTerakhir.Insert(0, $"{DateTime.Now:HH:mm:ss} {uid} -> {hasil}");
++        var hasil = await _auth.CheckAsync(uid).ConfigureAwait(false);
++        // SerialService.Reply sudah menerjemahkan "diterima" -> OPEN, lainnya -> DENY.
++        _serial.Reply(hasil);
++        OnUi(() =>
++        {
++            Status = hasil == "diterima" ? $"Terbuka — {uid}" : $"Ditolak — {uid}";
++            LogTerakhir.Insert(0, $"{DateTime.Now:HH:mm:ss} {uid} -> {hasil}");
++            while (LogTerakhir.Count > 100) LogTerakhir.RemoveAt(LogTerakhir.Count - 1);
++        });
++    }
++
++    // Event serial datang dari thread lain; WPF hanya boleh diubah dari UI thread.
++    private static void OnUi(Action aksi)
++    {
++        var dispatcher = Application.Current?.Dispatcher;
++        if (dispatcher is not null && !dispatcher.CheckAccess())
++            dispatcher.Invoke(aksi);
++        else
++            aksi();
+     }
+ 
+     // --- Navigasi layar ---
+diff --git a/src/SmartDoor.App/smartdoor.config.json b/src/SmartDoor.App/smartdoor.config.json
+new file mode 100644
+index 0000000..46408b1
+--- /dev/null
++++ b/src/SmartDoor.App/smartdoor.config.json
+@@ -0,0 +1,15 @@
++{
++  // Konfigurasi aplikasi. Dibaca SmartDoorConfig.Load() dari folder exe saat start.
++  // Urutan prioritas: environment variable > file ini > default LocalDB.
++
++  // Sesuaikan dengan server tempat database/schema.sql dijalankan:
++  //   LocalDB (ikut Visual Studio) : Server=(localdb)\MSSQLLocalDB;...
++  //   SQL Server Express           : Server=localhost\SQLEXPRESS;...
++  "ConnectionString": "Server=(localdb)\\MSSQLLocalDB;Database=SmartDoor;Trusted_Connection=True;TrustServerCertificate=True",
++
++  // Port Arduino Uno (Device Manager > Ports (COM & LPT)). Contoh: COM3, COM5.
++  "SerialPort": "COM3",
++
++  // id_pintu di tabel PINTU yang dipakai alat ini (database/seed.sql = 1).
++  "IdPintu": 1
++}
+-- 
+2.39.5
+
