@@ -3,8 +3,14 @@
 -- CreatedBy, CreatedDate, LastUpdatedBy, LastUpdatedDate) sesuai ketentuan dosen.
 -- CompanyCode = bagian primary key gabungan di tiap tabel (contoh: 'KEL4').
 -- Cara pakai (setelah SQL Server terinstal):
---   sqlcmd -S localhost\SQLEXPRESS -E -i database/schema.sql
---   sqlcmd -S localhost\SQLEXPRESS -E -i database/seed.sql
+--   SQL Server Express:
+--     sqlcmd -S localhost\SQLEXPRESS -E -i database/schema.sql
+--     sqlcmd -S localhost\SQLEXPRESS -E -i database/seed.sql
+--   SQL Server LocalDB (ikut Visual Studio):
+--     sqlcmd -S (localdb)\MSSQLLocalDB -E -i database/schema.sql
+--     sqlcmd -S (localdb)\MSSQLLocalDB -E -i database/seed.sql
+-- PENTING: server di atas harus sama dengan "ConnectionString" di
+-- smartdoor.config.json aplikasi frontend, kalau tidak aplikasi tidak akan konek.
 
 IF DB_ID(N'SmartDoor') IS NULL
     CREATE DATABASE SmartDoor;

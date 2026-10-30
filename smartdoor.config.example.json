@@ -1,0 +1,16 @@
+{
+  // Salin file ini menjadi smartdoor.config.json di folder src/SmartDoor.App (frontend),
+  // lalu sesuaikan. File dibaca dari folder exe saat aplikasi start.
+  // Urutan prioritas: environment variable > smartdoor.config.json > default LocalDB.
+
+  // Pakai salah satu:
+  //   LocalDB   : Server=(localdb)\MSSQLLocalDB;Database=SmartDoor;Trusted_Connection=True;TrustServerCertificate=True
+  //   Express   : Server=localhost\SQLEXPRESS;Database=SmartDoor;Trusted_Connection=True;TrustServerCertificate=True
+  "ConnectionString": "Server=(localdb)\\MSSQLLocalDB;Database=SmartDoor;Trusted_Connection=True;TrustServerCertificate=True",
+
+  // Port serial Arduino Uno (Device Manager > Ports). Contoh: COM3, COM5.
+  "SerialPort": "COM3",
+
+  // id_pintu di tabel PINTU yang dipakai alat ini (seed.sql = 1).
+  "IdPintu": 1
+}

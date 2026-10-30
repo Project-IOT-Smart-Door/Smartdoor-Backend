@@ -356,6 +356,27 @@ public sealed class SmartDoorDb(string connectionString)
             row.LastUpdatedBy, row.LastUpdatedDate);
     }
 
+    // Dipanggil frontend saat startup: pastikan connection string benar-benar
+    // menunjuk database SmartDoor, dan beri pesan yang bisa dibaca user.
+    public async Task<CekKoneksi> CekKoneksiAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await con.OpenAsync(ct).ConfigureAwait(false);
+            var nama = await con.ExecuteScalarAsync<string>(
+                new CommandDefinition("SELECT DB_NAME()", cancellationToken: ct))
+                .ConfigureAwait(false);
+            return new CekKoneksi(true, $"Terhubung ke database '{nama}'.");
+        }
+        catch (Exception ex)
+        {
+            return new CekKoneksi(false, "Gagal konek database: " + ex.Message);
+        }
+    }
+
+    public sealed record CekKoneksi(bool Ok, string Pesan);
+
     // Hasil gabungan kartu + pintu untuk satu tap.
     public sealed record AksesInfo(
         KartuRfid Kartu, int IdPintu, string NamaPintu,
